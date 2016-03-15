@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+rsync \
+    --compress \
+    --copy-links \
+    --exclude=.DS_Store \
+    --executability \
+    --human-readable \
+    --progress \
+    --prune-empty-dirs \
+    --recursive \
+    --times \
+    -vv \
+    "$ROCKHOPPER_DIR" rockhopper:
