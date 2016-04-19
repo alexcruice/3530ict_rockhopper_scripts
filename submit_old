@@ -1,0 +1,88 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'shellwords'
+
+options = {}
+
+OptionParser.new do |option_parser|
+  option_parser.set_banner <<-BANNER
+A Ruby script to automate the generation and submission of qsub scripts
+
+Usage:
+  submit [-k] [-j NAME] [-n N] [-p P] [-w HH:MM:SS] working_directory executable
+  submit -h/--help
+
+  BANNER
+
+  option_parser.version = 1
+  option_parser.release = 9
+  option_parser.set_summary_indent("  ")
+
+  options[:keep_script] = false
+  option_parser.on('-k', '--keep-script', 'Retain the generated qsub script (default is to discard it)') do
+    options[:keep_script] = true
+  end
+
+  options[:job_name] = 'pbs_job'
+  option_parser.on('-j', '--job-name NAME', "Identify job as NAME in the PBS job queue (default: #{options[:job_name]})") do |name|
+    options[:job_name] = name
+  end
+
+  options[:nodes] = 1
+  option_parser.on('-n', '--nodes N', Integer, "Use N nodes (default: #{options[:nodes]})") do |n|
+    options[:nodes] = n
+  end
+
+  options[:ppn] = 4
+  option_parser.on('-p', '--processors P', Integer, "Use P processors per node (default: #{options[:ppn]})") do |ppn|
+    options[:ppn] = ppn
+  end
+
+  options[:walltime] = '20:00'
+  option_parser.on('-w', '--walltime MAXRUNTIME', "Run for at most this long [[HH:]MM:]SS (default: #{options[:walltime]})") do |walltime_string|
+    seconds, minutes, hours = walltime_string.split(':').reverse.map { |string| string.to_i.abs }
+    [minutes, seconds].compact.map! { |int| [59, int].min }
+    options[:walltime] = [hours, minutes, seconds].compact.map { |int| int.to_s.rjust(2, '0') }.join(':')
+  end
+
+  option_parser.on_tail('-h', '--help', 'Show this help content') do
+    puts option_parser
+    exit
+  end
+
+  option_parser.on_tail('-v', '--version', 'Show version information') do
+    puts OptionParser::Version.join('.')
+    exit
+  end
+end.parse!
+
+fail ArgumentError, "wrong number of arguments (#{ARGV.length} for 2)" if ARGV.length != 2
+working_directory = Dir.new(ARGV[0])
+executable = File.basename(ARGV[1], '.*').gsub(/\s/, '_')
+submit_script = File.new("submit_#{executable}.sh", 'w')
+original_working_directory = Dir.pwd
+Dir.chdir(working_directory.path)
+
+submit_script.write(<<-BATCH)
+#!/bin/bash
+
+#PBS -q batch
+#PBS -N #{options[:job_name]}
+#PBS -r n
+#PBS -k oe
+#PBS -l nodes=#{options[:nodes]}:ppn=#{options[:ppn]},walltime=#{options[:walltime]}
+
+echo PBS working directory: $PBS_O_WORKDIR
+echo Running host: "$(hostname)"
+echo Current time: "$(date)"
+echo Working directory before cd: "$(pwd)"
+cd #{Dir.pwd.shellescape}
+echo Working directory after cd: "$(pwd)"
+mpiexec -hostfile $PBS_NODEFILE -np #{options[:nodes] * options[:ppn]} #{executable} > #{executable}_output.txt
+BATCH
+
+Dir.chdir original_working_directory
+submit_script.close
+puts `qsub #{submit_script.path}`
+File.delete(submit_script.path) unless options[:keep_script]
